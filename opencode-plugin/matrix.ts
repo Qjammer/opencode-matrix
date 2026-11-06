@@ -38,7 +38,10 @@ export function readAsToken(file: string) {
   }
   const registration = /^\s*["']?as_token["']?\s*:\s*["']?([^"'\s]+)["']?\s*$/m.exec(text)
   if (registration) return registration[1]
-  if (/^[A-Za-z0-9._~+\/=-]+$/.test(text)) return text
+  // A file holding only the token: one line of non-space characters, without the quotes or colons
+  // that would make it a mapping instead. as_tokens are opaque (Synapse uses the registration's as
+  // is), so don't restrict them further: a token with punctuation is still a token.
+  if (/^[^\s:"']+$/.test(text)) return text
   throw invalid
 }
 
