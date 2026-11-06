@@ -31,4 +31,6 @@ second job runs the tests as `john.smith` with `localpart` `{person}+{name}` in 
 `TEST_LOCALPART` set to match.
 
 The same workflow packs the plugin (`npm pack`, with the repository's LICENSE) on every run. Pushing a tag `v<version>`
-matching `opencode-plugin/package.json` creates a GitHub release with that package, once the tests pass.
+matching `opencode-plugin/package.json` creates a GitHub release with that package, once the tests pass. The
+homelab deploys the plugin from releases. The lockfile is `npm-shrinkwrap.json` because `npm pack` leaves out
+`package-lock.json`, and the deploy runs `npm ci` from the package.

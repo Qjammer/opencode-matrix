@@ -8,7 +8,8 @@
   "main": "index.ts",
   "files": [
     "*.ts",
-    "!*.test.ts"
+    "!*.test.ts",
+    "npm-shrinkwrap.json"
   ],
   "exports": {
     ".": "./index.ts"
