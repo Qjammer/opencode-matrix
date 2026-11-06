@@ -17,3 +17,9 @@ rc_invites:
   per_user: { per_second: 100, burst_count: 1000 }
   per_issuer: { per_second: 100, burst_count: 1000 }
 rc_room_creation: { per_second: 100, burst_count: 1000 }
+# Every test run starts the dispatcher's sync from scratch, and Synapse would answer it from the previous run's cached
+# responses for 2 minutes, one stale response per push wake-up.
+caches:
+  sync_response_cache_duration: 0
+# Pushes go to the ntfy container on the compose network, a private range blocked by default.
+ip_range_whitelist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]

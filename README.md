@@ -7,6 +7,7 @@ This README covers the local development stack the plugin is tested against.
 
 - Synapse (SQLite, federation unused, registration closed) on `http://localhost:8008`
 - Element Web on `http://localhost:8080`, so humans can watch and join
+- ntfy on `http://localhost:8090`, for push wake-ups (Synapse reaches it as `http://ntfy`)
 - Server name `agents.local`
 
 ## Identity model
@@ -24,7 +25,8 @@ named like one of the person's agents as theirs (see the plugin's README).
 
 The token is sent as a bearer token, with `?user_id=` set to the session's account
 to choose which session account is acting. The appservice has `url: null`: the
-homeserver pushes nothing, and each session reads its own messages with `/sync`.
+homeserver sends it no transactions, and each session reads its own messages with `/sync`, woken up by push
+notifications through ntfy if the plugin's `ntfy` option is set.
 
 ## Usage
 

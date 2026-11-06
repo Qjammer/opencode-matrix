@@ -47,12 +47,14 @@ import {
   type StartOptions,
 } from "./commands.ts"
 import { checkClientPath, Matrix, MatrixError, readAsToken } from "./matrix.ts"
+import { newTopic, Ntfy, Waker } from "./push.ts"
 import { categories, describeOperation, findOperations, listLine, MAX_RESULTS, operations, searchOperations, specURL, type Operation } from "./openapi.ts"
 
 // One Matrix account per OpenCode session, created through the person's appservice token. An account is
 // created the first time a session uses a matrix_* tool, when another session messages it, or right away
 // for Threads/workflow workers so their coordinator can reach them. Each account runs a /sync loop that
-// delivers DMs and mentions to its session as synthetic messages. With `workspace` set, a dispatcher
+// delivers DMs and mentions to its session as synthetic messages: a long-poll, or with `ntfy` a sync whenever the
+// account's pusher wakes it up (see push.ts). With `workspace` set, a dispatcher
 // account (@<person>.agent by default) starts a new session for every DM or mention it gets from the person.
 
 export interface AgentMatrixOptions {
@@ -72,6 +74,12 @@ export interface AgentMatrixOptions {
   registration: string
   /** Directory for sessions started through the dispatcher; the dispatcher is disabled without it. */
   workspace?: string
+  /**
+   * An ntfy server the homeserver pushes to: its `base-url`, and the URL of its Matrix push gateway as the homeserver
+   * reaches it (default `<url>/_matrix/push/v1/notify`). With it, sync loops wait for push notifications instead of
+   * long-polling.
+   */
+  ntfy?: { url: string; gateway?: string }
   /** Largest file matrix_download fetches, in MB. Default 50. */
   maxDownloadMB?: number
   debug?: boolean
@@ -80,6 +88,22 @@ export interface AgentMatrixOptions {
 /** The dispatcher's key in loops and storage, whatever its account is called. */
 const DISPATCHER = "agent"
 const SYNC_TIMEOUT_MS = 30_000
+/** With ntfy, a loop also syncs this long after its last sync, in case a notification was lost. */
+const PUSH_POLL_MS = 5 * 60_000
+/**
+ * With ntfy, how long a sync waits for new events. A push can arrive before the event shows up in /sync (seen with
+ * invites): without a wait, that sync would come back empty and the event would wait for the next wake-up.
+ */
+const PUSH_SYNC_TIMEOUT_MS = 2_000
+const PUSH_APP_ID = "dev.opencode.agent-matrix"
+/**
+ * Push rules for the accounts: by default only invites, DMs without notices or edits, and mentions notify, and
+ * reactions never do. These notify for every event in a two-member room and every reaction anywhere.
+ */
+const PUSH_RULES = [
+  { id: "dev.opencode.agent-matrix.dm", conditions: [{ kind: "room_member_count", is: "2" }] },
+  { id: "dev.opencode.agent-matrix.reaction", conditions: [{ kind: "event_match", key: "type", pattern: "m.reaction" }] },
+]
 const RETRY_MS = 5_000
 const MAX_API_CHARS = 20_000
 const DEFAULT_MAX_DOWNLOAD_MB = 50
@@ -103,6 +127,7 @@ interface SharedState {
   running: Set<string>
   /** Read receipts sent once a model call of the session includes the message (any message, without `eventId`). */
   unread: Map<string, PendingReceipt[]>
+  ntfy?: Ntfy
 }
 interface PendingReceipt {
   userID: string
@@ -156,6 +181,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   const matrix = new Matrix({ homeserver: options.homeserver, serverName: options.serverName, asToken: readAsToken(options.registration) })
   const state = shared()
   state.ctxs.add(ctx)
+  const ntfy = options.ntfy ? (state.ntfy ??= new Ntfy(options.ntfy.url, options.ntfy.gateway, (...args) => log(...args))) : undefined
 
   const log = (...args: unknown[]) => {
     if (options.debug) console.error("[agent-matrix]", ...args)
@@ -241,18 +267,58 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
 
   async function runLoop(key: string, userID: string, handle: SyncHandler, signal: AbortSignal) {
     let since = (await storage().get(`since:${key}`)) as string | undefined
-    while (!signal.aborted) {
-      try {
-        const response = await matrix.sync(userID, since, since ? SYNC_TIMEOUT_MS : 0, SYNC_FILTER, signal)
-        await handle(response, !since)
-        since = response.next_batch as string
-        await storage().set(`since:${key}`, since)
-      } catch (error) {
-        if (signal.aborted) break
-        log("sync error", key, error)
-        await sleep(RETRY_MS, signal)
+    let push: { topic: string; waker: Waker } | undefined
+    try {
+      while (!signal.aborted) {
+        let invited = false
+        try {
+          if (ntfy && !push) push = await subscribe(key, userID, ntfy)
+          const response = await matrix.sync(userID, since, !since ? 0 : push ? PUSH_SYNC_TIMEOUT_MS : SYNC_TIMEOUT_MS, SYNC_FILTER, signal)
+          await handle(response, !since)
+          since = response.next_batch as string
+          await storage().set(`since:${key}`, since)
+          invited = Object.keys(response.rooms?.invite ?? {}).length > 0
+        } catch (error) {
+          if (signal.aborted) break
+          log("sync error", key, error)
+          await sleep(RETRY_MS, signal)
+          continue
+        }
+        // Messages sent while the account was only invited (e.g. the mention that invited it) were never pushed to
+        // it: the next sync, with the rooms it just joined, has them.
+        if (push && !invited) await push.waker.wait(PUSH_POLL_MS, signal)
       }
+    } finally {
+      if (push) ntfy!.remove(push.topic)
     }
+  }
+
+  /** Points the account's pusher at its ntfy topic and follows the topic. */
+  async function subscribe(key: string, userID: string, ntfy: Ntfy) {
+    let topic = (await storage().get(`topic:${key}`)) as string | undefined
+    if (!topic) {
+      topic = newTopic()
+      await storage().set(`topic:${key}`, topic)
+    }
+    const pushkey = ntfy.pushkey(topic)
+    // Pushers to other topics (lost storage, another ntfy server) would publish to topics nobody follows.
+    for (const pusher of await matrix.pushers(userID)) {
+      if (pusher.app_id === PUSH_APP_ID && pusher.pushkey !== pushkey) await matrix.setPusher(userID, { kind: null, app_id: PUSH_APP_ID, pushkey: pusher.pushkey })
+    }
+    await matrix.setPusher(userID, {
+      kind: "http",
+      app_id: PUSH_APP_ID,
+      pushkey,
+      app_display_name: "OpenCode",
+      device_display_name: "agent-matrix",
+      lang: "en",
+      data: { url: ntfy.gateway, format: "event_id_only" },
+    })
+    for (const { id, conditions } of PUSH_RULES) await matrix.setPushRule(userID, "override", id, { conditions, actions: ["notify"] })
+    const waker = new Waker()
+    ntfy.add(topic, waker)
+    log("subscribed", key, topic)
+    return { topic, waker }
   }
 
   async function acceptInvites(sessionID: string, userID: string, response: any, from?: string) {
@@ -1089,6 +1155,12 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
           state.loops.get(sessionID)?.abort()
           state.ensuring.delete(sessionID)
           state.unread.delete(sessionID)
+          const topic = (await storage().get(`topic:${sessionID}`)) as string | undefined
+          const account = (await storage().get(`account:${sessionID}`)) as { userID: string } | undefined
+          if (ntfy && topic && account) {
+            await matrix.setPusher(account.userID, { kind: null, app_id: PUSH_APP_ID, pushkey: ntfy.pushkey(topic) }).catch((error) => log("pusher removal failed", error))
+          }
+          await storage().remove(`topic:${sessionID}`)
           await storage().remove(`account:${sessionID}`)
           await storage().remove(`since:${sessionID}`)
           await storage().remove(`dispatched:${sessionID}`)
@@ -1132,6 +1204,8 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
       for (const controller of state.loops.values()) controller.abort()
       state.loops.clear()
       state.ensuring.clear()
+      state.ntfy?.stop()
+      state.ntfy = undefined
     }
   }
 }

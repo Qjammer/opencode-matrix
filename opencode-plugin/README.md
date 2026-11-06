@@ -11,7 +11,8 @@ under [Options](#options)), created through the person's appservice token (see `
 - **Eagerly** for Threads and workflow workers (`session.created` with `metadata.opThreads` or
   `metadata.opWorkflow`), so their coordinator can talk to them from the start.
 
-Every account runs a long-poll `/sync` loop. **DMs, mentions and reactions to the session's own messages** are
+Every account runs a `/sync` loop: a long-poll, or with `ntfy` a sync whenever a push wakes it up (see
+[Push](#push)). **DMs, mentions and reactions to the session's own messages** are
 delivered to the session as synthetic
 messages (`resume: true`, so an idle session wakes up), batched per sync response, with a deterministic ID so a
 re-delivery after a restart is a no-op. Other room traffic is not pushed: read it with `matrix_read`. Invites
@@ -123,6 +124,7 @@ its renderer, `lib/pages/chat/events/html_message.dart`. Other clients were not 
     "localpart": "{person}.{name}", // optional, how agent accounts are named
     "dispatcher": "agent", // optional, the dispatcher's {name}
     "workspace": "/path/to/workspace", // optional, enables the dispatcher
+    "ntfy": { "url": "https://ntfy.example.org" }, // optional, push wake-ups instead of long-polling (see Push)
     "maxDownloadMB": 50, // optional, largest file matrix_download fetches
     "debug": false
   }
@@ -143,11 +145,34 @@ only the person's own account is treated as giving instructions.
 `dispatcher` names the dispatcher, for instance when two OpenCode servers of the same person use one homeserver and
 each needs its own.
 
+## Push
+
+Without `ntfy`, each account holds a long-poll `/sync` open all the time. With it, each account gets an HTTP pusher
+that sends its notifications to its own random topic (`up` and 32 letters and digits, kept in plugin storage) on
+an [ntfy](https://ntfy.sh) server, through ntfy's Matrix push gateway. The plugin follows all topics on one stream
+(per 100 topics) and, for each notification, syncs that account once from its stored position (waiting up to 2
+seconds, since a push can arrive before its event shows up in `/sync`). The
+notification is only a wake-up (`format: event_id_only`), so its content is never used. Every account also syncs on
+startup, whenever a stream (re)connects and 5 minutes after its last sync, so a lost notification only delays
+delivery. Only outbound connections are needed from the OpenCode server.
+
+- `ntfy.url` is the ntfy server's `base-url`: ntfy only accepts push keys under it. The plugin subscribes there.
+- `ntfy.gateway` is where the homeserver posts, if it reaches ntfy at another address (default
+  `<url>/_matrix/push/v1/notify`). Synapse refuses private addresses unless they are in `ip_range_whitelist`.
+- The topics must be readable without a token: ntfy's default, or `auth-access: "*:up*:rw"` with `auth-default-access:
+  deny-all`. The topic names are the secret, as for UnifiedPush on ntfy.sh. Synapse publishes for every account, so
+  exempt it from ntfy's rate limits (`visitor-request-limit-exempt-hosts`).
+- The appservice's user namespace must not be exclusive: Synapse only pushes invites to exclusive appservice users.
+- Pushes follow push rules. Besides the defaults (invites, mentions, DMs), the plugin adds two override rules to
+  each account: every event in a two-member room, so notices and edits in DMs wake it up too, and every reaction.
+- A deleted session's pusher is removed.
+
 ## Tests
 
 `bun install && bun test`. `index.test.ts` runs against the local Synapse (skipped if it is down) with a mock OpenCode context.
 `TEST_PERSON` and `TEST_LOCALPART` run it as another person and naming, after
-`../add-person.sh <person> --localpart <template>`.
+`../add-person.sh <person> --localpart <template>`. `TEST_NTFY=1` uses the stack's ntfy, after
+`../add-person.sh <person> --not-exclusive`.
 
 ## Known gaps
 
