@@ -1,6 +1,0 @@
-version: '3'
-tasks:
-  update-pipeline:
-    desc: Update the CI pipeline
-    cmds:
-      - fly -t homelab set-pipeline -p opencode-matrix -c ci/pipeline.yaml

@@ -1,4 +1,4 @@
-# Appended to the generated homeserver.yaml by setup.sh and ci/test.sh.
+# Appended to the generated homeserver.yaml by setup.sh.
 enable_registration: false
 presence:
   enabled: true
