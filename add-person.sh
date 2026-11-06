@@ -5,7 +5,8 @@
 # Usage: ./add-person.sh <name> [--localpart TEMPLATE] [--not-exclusive]
 #   --localpart '{person}+{name}'   agent accounts are @<name>+ses_..., as on servers where names contain dots
 #   --not-exclusive                 other accounts may be created in the namespace too (homeservers only send
-#                                   push notifications to non-exclusive appservice users)
+#                                   push notifications to non-exclusive appservice users); sessions would describe
+#                                   them as the person's agents
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -54,4 +55,5 @@ if [ ! -f "secrets/$NAME-password" ]; then
 fi
 
 echo "Human account: @$NAME:$SERVER_NAME (password in secrets/$NAME-password)"
-echo "Agent accounts: @${LOCALPART/\{person\}/$NAME}:$SERVER_NAME, {name} being ses_<id> or the dispatcher (token in appservices/$NAME.yaml)"
+echo "Agent accounts: @${LOCALPART/\{person\}/$NAME}:$SERVER_NAME, {name} being ses_<id> or the dispatcher"
+echo "Appservice token in appservices/$NAME.yaml"

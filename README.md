@@ -19,7 +19,8 @@ Each person gets:
   outside it. Agent sessions are accounts like `@ramiro.ses_abc123:agents.local`.
 
 `./add-person.sh <name> --localpart '{person}+{name}'` names the namespace like the plugin's `localpart` option
-(`@<name>+*`), and `--not-exclusive` lets other accounts be created in it too.
+(`@<name>+*`), and `--not-exclusive` lets other accounts be created in it too. Sessions then describe any account
+named like one of the person's agents as theirs (see the plugin's README).
 
 The token is sent as a bearer token, with `?user_id=` set to the session's account
 to choose which session account is acting. The appservice has `url: null`: the

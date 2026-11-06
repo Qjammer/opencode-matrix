@@ -11,9 +11,12 @@ function file(name: string, text: string) {
   return path
 }
 
-test("the token comes from an appservice registration, in YAML or JSON style", () => {
-  expect(readAsToken(file("registration.yaml", "id: ramiro-sessions\nas_token: abc123\nhs_token: def456\n"))).toBe("abc123")
-  expect(readAsToken(file("terraform.yaml", '"as_token": "abc123"\n"hs_token": "def456"\n'))).toBe("abc123")
+test("the token comes from an appservice registration, in YAML or JSON", () => {
+  expect(readAsToken(file("registration.yaml", "id: sessions\nas_token: abc123\nhs_token: def456\n"))).toBe("abc123")
+  expect(readAsToken(file("quoted.yaml", '"as_token": "abc123"\n"hs_token": "def456"\n'))).toBe("abc123")
+  expect(readAsToken(file("single-quoted.yaml", "as_token: 'abc123'\nhs_token: 'def456'\n"))).toBe("abc123")
+  expect(readAsToken(file("one-line.json", '{"as_token":"abc123","hs_token":"def456"}'))).toBe("abc123")
+  expect(readAsToken(file("pretty.json", '{\n  "as_token": "abc123",\n  "hs_token": "def456"\n}\n'))).toBe("abc123")
 })
 
 test("a file holding only the token is the token", () => {
@@ -23,4 +26,7 @@ test("a file holding only the token is the token", () => {
 test("anything else is refused", () => {
   expect(() => readAsToken(file("empty", ""))).toThrow("neither")
   expect(() => readAsToken(file("prose", "not a token\n"))).toThrow("neither")
+  expect(() => readAsToken(file("no-token.json", '{"hs_token":"def456"}'))).toThrow("neither")
+  expect(() => readAsToken(file("broken.json", '{"as_token":'))).toThrow("neither")
+  expect(() => readAsToken(file("other.yaml", "id:sessions"))).toThrow("neither")
 })

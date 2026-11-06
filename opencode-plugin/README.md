@@ -22,11 +22,12 @@ cannot see the transcript.
 
 ## Dispatcher
 
-With the `workspace` option, the plugin also runs a dispatcher account, `@<person>.agent` by default. Every DM to it (or mention of it) from the
-person's human account creates a session in `workspace`, gives it an account that invites the human to a DM, and
-sends the message as the session's first prompt, with an instruction to answer through `matrix_send`. The
-session starts untitled, so OpenCode's `title` agent names it after the first prompt, which renames the account and
-the DM (see `!rename` below). The dispatcher replies in the original room with the session ID. It declines invites from anyone else.
+With the `workspace` option, the plugin also runs a dispatcher account, `@<person>.agent` by default. Every DM to it (or
+mention of it) from the person's human account creates a session in `workspace`, gives it an account that invites the
+human to a DM, and sends the message as the session's first prompt, with an instruction to answer through `matrix_send`.
+The session starts untitled, so OpenCode's `title` agent names it after the first prompt, which renames the account and
+the DM (see `!rename` below). The dispatcher replies in the original room with the session ID. It declines invites from
+anyone else.
 
 Leading `key=value` options choose the session's settings; parsing stops at the first other word:
 
@@ -134,13 +135,19 @@ The default, `{person}.{name}`, gives `@ramiro.ses_abc123` and `@ramiro.agent`. 
 contain dots, `{person}+{name}` keeps them apart from people's own accounts (`@jane.doe+ses_abc123` next to
 `@jane.doe`). Changing it only affects accounts created afterwards; existing sessions keep theirs.
 
+Sessions describe senders whose names match `localpart` as agent sessions of that person. If the appservice's
+namespace isn't exclusive, other accounts can be created with such names (by the homeserver's admins, or by anyone if
+registration is open), and would be described the same way. This only affects the description: whatever the label,
+only the person's own account is treated as giving instructions.
+
 `dispatcher` names the dispatcher, for instance when two OpenCode servers of the same person use one homeserver and
 each needs its own.
 
 ## Tests
 
 `bun install && bun test`. `index.test.ts` runs against the local Synapse (skipped if it is down) with a mock OpenCode context.
-`TEST_PERSON` and `TEST_LOCALPART` run it as another person and naming, after `../add-person.sh <person> --localpart <template>`.
+`TEST_PERSON` and `TEST_LOCALPART` run it as another person and naming, after
+`../add-person.sh <person> --localpart <template>`.
 
 ## Known gaps
 
