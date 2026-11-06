@@ -7,8 +7,10 @@ import plugin from "./index.ts"
 import { readAsToken } from "./matrix.ts"
 
 // Runs against the local Synapse from ../setup.sh with person "ramiro" (../add-person.sh ramiro). TEST_PERSON and
-// TEST_LOCALPART test another person and naming (../add-person.sh <person> --localpart <template>).
+// TEST_LOCALPART test another person and naming (../add-person.sh <person> --localpart <template>). TEST_NTFY=1 wakes
+// the sync loops through the stack's ntfy instead of long-polling, so every delivery below then depends on a push.
 const HOMESERVER = "http://localhost:8008"
+const NTFY = process.env.TEST_NTFY ? { url: "http://localhost:8090", gateway: "http://ntfy/_matrix/push/v1/notify" } : undefined
 const ROOT = join(import.meta.dir, "..")
 const PERSON = process.env.TEST_PERSON ?? "ramiro"
 const identity = { person: PERSON, serverName: "agents.local", localpart: process.env.TEST_LOCALPART ?? DEFAULT_LOCALPART, dispatcher: DEFAULT_DISPATCHER }
@@ -63,6 +65,7 @@ function mockCtx() {
         localpart: identity.localpart,
         registration: REGISTRATION,
         workspace: WORKSPACE,
+        ntfy: NTFY,
       },
       storage: {
         get: async (key: string) => store.get(key),
@@ -219,6 +222,13 @@ test.skipIf(!up)("mentioning a session in a team room invites it and notifies it
   expect(history).toContain("general chatter")
   expect(history).toContain("please check the migration")
 }, 60_000)
+
+test.skipIf(!up || !NTFY)("with ntfy, accounts get a pusher to their own topic", async () => {
+  const pushers = (await asAccount(accountOf(WORKER), "/pushers")).pushers
+  const topic = mock.store.get(`topic:${WORKER}`) as string
+  expect(topic).toMatch(/^up[A-Za-z0-9]{32}$/)
+  expect(pushers).toEqual([expect.objectContaining({ kind: "http", pushkey: `${NTFY!.url}/${topic}?up=1`, data: expect.objectContaining({ url: NTFY!.gateway }) })])
+})
 
 test.skipIf(!up)("Threads workers get an account as soon as they are created", async () => {
   mock.sessions.set(SPAWNED, { id: SPAWNED, title: "Spawned worker", metadata: { opThreads: { coordinatorID: LEAD } } })

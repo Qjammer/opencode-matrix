@@ -133,6 +133,19 @@ export class Matrix {
     return this.request("GET", "/sync", as, { query, signal })
   }
 
+  /** Creates or updates an HTTP pusher (`POST /pushers/set`); `kind: null` in `pusher` deletes it. */
+  setPusher(as: string, pusher: Record<string, unknown>) {
+    return this.request("POST", "/pushers/set", as, { body: pusher })
+  }
+
+  async pushers(as: string): Promise<any[]> {
+    return (await this.request("GET", "/pushers", as)).pushers ?? []
+  }
+
+  setPushRule(as: string, kind: string, ruleId: string, rule: { conditions?: unknown[]; actions: unknown[] }) {
+    return this.request("PUT", `/pushrules/global/${kind}/${encodeURIComponent(ruleId)}`, as, { body: rule })
+  }
+
   async join(as: string, roomIdOrAlias: string): Promise<string> {
     return (await this.request("POST", `/join/${encodeURIComponent(roomIdOrAlias)}`, as, { body: {} })).room_id
   }

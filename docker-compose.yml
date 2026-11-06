@@ -11,6 +11,19 @@ services:
     ports:
       - "127.0.0.1:8008:8008"
 
+  # Push gateway: Synapse posts to http://ntfy/_matrix/push/v1/notify, the plugin follows topics on localhost:8090.
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      NTFY_BASE_URL: "http://localhost:8090"
+      NTFY_LISTEN_HTTP: ":80"
+      # Synapse publishes for every account, faster than the default rate limits allow.
+      NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    ports:
+      - "127.0.0.1:8090:80"
+
   element:
     image: vectorim/element-web:latest
     restart: unless-stopped
