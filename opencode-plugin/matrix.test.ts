@@ -21,6 +21,8 @@ test("the token comes from an appservice registration, in YAML or JSON", () => {
 
 test("a file holding only the token is the token", () => {
   expect(readAsToken(file("token", "abc123\n"))).toBe("abc123")
+  // as_tokens are opaque: Synapse takes whatever the registration says, and ours has punctuation.
+  expect(readAsToken(file("punctuated", "a&b%c$d~e/f+g=h\n"))).toBe("a&b%c$d~e/f+g=h")
 })
 
 test("anything else is refused", () => {
