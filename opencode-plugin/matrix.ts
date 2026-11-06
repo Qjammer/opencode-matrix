@@ -22,11 +22,24 @@ export class MatrixError extends Error {
   }
 }
 
-export function readAsToken(registrationFile: string) {
-  for (const line of readFileSync(registrationFile, "utf8").split("\n")) {
-    if (line.startsWith("as_token:")) return line.slice("as_token:".length).trim()
+/** The as_token of an appservice registration file (YAML or JSON), or the content of a file holding only the token. */
+export function readAsToken(file: string) {
+  const text = readFileSync(file, "utf8").trim()
+  const invalid = new Error(`${file} holds neither an appservice registration (as_token) nor a token`)
+  if (text.startsWith("{")) {
+    let token: unknown
+    try {
+      token = JSON.parse(text).as_token
+    } catch {
+      throw invalid
+    }
+    if (typeof token === "string" && token) return token
+    throw invalid
   }
-  throw new Error(`no as_token in ${registrationFile}`)
+  const registration = /^\s*["']?as_token["']?\s*:\s*["']?([^"'\s]+)["']?\s*$/m.exec(text)
+  if (registration) return registration[1]
+  if (/^[A-Za-z0-9._~+\/=-]+$/.test(text)) return text
+  throw invalid
 }
 
 /**
