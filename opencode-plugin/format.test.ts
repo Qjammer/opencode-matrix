@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import {
   attachmentType,
+  checkLocalpart,
   describeAttachment,
   describeSender,
+  dispatcherLocalpart,
   excerpt,
   formatMessage,
   htmlToText,
@@ -18,10 +20,24 @@ import {
   stripReplyFallback,
 } from "./format.ts"
 
-const identity = { person: "ramiro", serverName: "agents.local" }
+const identity = { person: "ramiro", serverName: "agents.local", localpart: "{person}.{name}", dispatcher: "agent" }
+// A server where people's names contain dots, so agent accounts are @<person>+<name>.
+const dotted = { person: "jane.doe", serverName: "example.org", localpart: "{person}+{name}", dispatcher: "agent" }
 
 test("session accounts are lowercase and live in the person's namespace", () => {
   expect(sessionLocalpart(identity, "ses_AbC123")).toBe("ramiro.ses_abc123")
+  expect(sessionLocalpart(dotted, "ses_AbC123")).toBe("jane.doe+ses_abc123")
+})
+
+test("the dispatcher is named like the sessions", () => {
+  expect(dispatcherLocalpart(identity)).toBe("ramiro.agent")
+  expect(dispatcherLocalpart({ ...dotted, dispatcher: "agent-laptop" })).toBe("jane.doe+agent-laptop")
+})
+
+test("a localpart template needs {person} and {name} once each", () => {
+  expect(() => checkLocalpart("{person}+{name}")).not.toThrow()
+  expect(() => checkLocalpart("agents.{name}")).toThrow("{person}")
+  expect(() => checkLocalpart("{person}.{name}.{name}")).toThrow("{name}")
 })
 
 test("targets", () => {
@@ -51,6 +67,15 @@ test("senders are described relative to the receiving session", () => {
   expect(describeSender(identity, "@ramiro.ses_b:agents.local", self)).toBe("another of your user's agent sessions")
   expect(describeSender(identity, "@marta.ses_c:agents.local", self)).toBe("an agent session of marta")
   expect(describeSender(identity, "@marta:agents.local", self)).toBe("a person (marta)")
+})
+
+test("senders are described by whose agent they are, with dots in people's names", () => {
+  const self = "@jane.doe+ses_a:example.org"
+  expect(describeSender(dotted, "@jane.doe:example.org", self)).toBe("your user (jane.doe)")
+  expect(describeSender(dotted, "@jane.doe+ses_b:example.org", self)).toBe("another of your user's agent sessions")
+  expect(describeSender(dotted, "@jane.doe+agent:example.org", self)).toBe("another of your user's agent sessions")
+  expect(describeSender(dotted, "@jane.doerr+ses_c:example.org", self)).toBe("an agent session of jane.doerr")
+  expect(describeSender(dotted, "@jane.doerr:example.org", self)).toBe("a person (jane.doerr)")
 })
 
 test("mentions come from m.mentions or the user ID in the body", () => {
