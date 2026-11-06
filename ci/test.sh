@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs the plugin's tests against a throwaway Synapse, inside the matrixdotorg/synapse image (Concourse can't run
-# Docker, so this replaces setup.sh and add-person.sh). Run from the repository root.
+# Runs the plugin's tests against a throwaway Synapse, inside the matrixdotorg/synapse image (CI runs it as the
+# job's container, without Docker, so this replaces setup.sh and add-person.sh). Run from the repository root.
 #
 # TEST_PERSON, TEST_LOCALPART and TEST_EXCLUSIVE choose the person and how their agent accounts are named (the
 # plugin's `localpart` option); the defaults are the plugin's.
