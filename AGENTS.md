@@ -25,12 +25,10 @@ to the session.
 
 `cd opencode-plugin && bun install && bun test` after `./setup.sh && ./add-person.sh ramiro` (local Synapse on :8008).
 
-CI (`.github/workflows/ci.yml`, GitHub Actions) runs `ci/test.sh` on every push and pull request: it starts a
-throwaway Synapse inside the `matrixdotorg/synapse` image, sets up `ramiro` as `add-person.sh` would, and runs the
-same tests. A second job runs them as `john.smith` with `localpart` `{person}+{name}` in a non-exclusive
-namespace (`TEST_PERSON`, `TEST_LOCALPART`, `TEST_EXCLUSIVE`). To run one locally:
-`docker run --rm --entrypoint /src/ci/test.sh -v <copy of the repo>:/src -w /src matrixdotorg/synapse`.
-`synapse-overrides.yaml` and `scripts/appservice-registration.sh` are shared with `setup.sh` and `add-person.sh`.
+CI (`.github/workflows/ci.yml`, GitHub Actions) runs the same on every push and pull request, on a fresh stack. A
+second job runs the tests as `john.smith` with `localpart` `{person}+{name}` in a non-exclusive namespace:
+`./add-person.sh john.smith --localpart '{person}+{name}' --not-exclusive`, then `bun test` with `TEST_PERSON` and
+`TEST_LOCALPART` set to match.
 
 The same workflow packs the plugin (`npm pack`, with the repository's LICENSE) on every run. Pushing a tag `v<version>`
 matching `opencode-plugin/package.json` creates a GitHub release with that package, once the tests pass.
