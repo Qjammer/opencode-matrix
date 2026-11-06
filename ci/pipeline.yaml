@@ -1,0 +1,25 @@
+resources:
+  - name: opencode-matrix-src
+    type: git
+    icon: git
+    source:
+      uri: https://github.com/Qjammer/opencode-matrix.git
+      branch: main
+
+jobs:
+  - name: test
+    plan:
+      - get: opencode-matrix-src
+        trigger: true
+      - task: test
+        config:
+          inputs:
+            - name: opencode-matrix-src
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              repository: matrixdotorg/synapse
+          run:
+            dir: opencode-matrix-src
+            path: ci/test.sh

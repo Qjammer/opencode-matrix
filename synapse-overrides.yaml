@@ -1,0 +1,19 @@
+# Appended to the generated homeserver.yaml by setup.sh and ci/test.sh.
+enable_registration: false
+presence:
+  enabled: true
+# The tests drive the human account much faster than a person would.
+rc_login:
+  account: { per_second: 100, burst_count: 1000 }
+  address: { per_second: 100, burst_count: 1000 }
+  failed_attempts: { per_second: 100, burst_count: 1000 }
+rc_message: { per_second: 100, burst_count: 1000 }
+rc_joins:
+  local: { per_second: 100, burst_count: 1000 }
+  remote: { per_second: 100, burst_count: 1000 }
+rc_joins_per_room: { per_second: 100, burst_count: 1000 }
+rc_invites:
+  per_room: { per_second: 100, burst_count: 1000 }
+  per_user: { per_second: 100, burst_count: 1000 }
+  per_issuer: { per_second: 100, burst_count: 1000 }
+rc_room_creation: { per_second: 100, burst_count: 1000 }

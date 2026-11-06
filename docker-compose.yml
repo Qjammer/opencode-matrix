@@ -1,0 +1,20 @@
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    restart: unless-stopped
+    environment:
+      UID: "${UID:-1000}"
+      GID: "${GID:-1000}"
+    volumes:
+      - ./data:/data
+      - ./appservices:/appservices:ro
+    ports:
+      - "127.0.0.1:8008:8008"
+
+  element:
+    image: vectorim/element-web:latest
+    restart: unless-stopped
+    volumes:
+      - ./element-config.json:/app/config.json:ro
+    ports:
+      - "127.0.0.1:8080:80"
