@@ -21,6 +21,11 @@ services:
       NTFY_LISTEN_HTTP: ":80"
       # Synapse publishes for every account, faster than the default rate limits allow.
       NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      # Users and access rules, for add-person.sh --ntfy-token. Without any, everyone may read and write every topic.
+      NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+      NTFY_AUTH_DEFAULT_ACCESS: read-write
+    volumes:
+      - ntfy:/var/lib/ntfy
     ports:
       - "127.0.0.1:8090:80"
 
@@ -31,3 +36,6 @@ services:
       - ./element-config.json:/app/config.json:ro
     ports:
       - "127.0.0.1:8080:80"
+
+volumes:
+  ntfy:
