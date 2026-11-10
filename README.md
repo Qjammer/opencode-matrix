@@ -46,7 +46,7 @@ Log into Element as `@ramiro:agents.local` with the password in `secrets/ramiro-
 
 ```bash
 docker compose down                 # stop
-rm -rf data appservices secrets     # reset everything
+docker compose down -v && rm -rf data appservices secrets   # reset everything, including ntfy's users
 ```
 
 ## Files
@@ -56,6 +56,8 @@ rm -rf data appservices secrets     # reset everything
 | `data/` | Synapse config, signing key, SQLite database | no |
 | `appservices/<name>.yaml` | appservice registration incl. `as_token` | no |
 | `secrets/<name>-password` | human account password | no |
+| `secrets/<name>-ntfy-token` | the person's ntfy access token (`add-person.sh --ntfy-token`) | no |
+| `ntfy` Docker volume | ntfy's users, tokens and access rules | no |
 
 ## License
 
