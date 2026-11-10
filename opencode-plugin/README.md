@@ -125,6 +125,8 @@ its renderer, `lib/pages/chat/events/html_message.dart`. Other clients were not 
     "dispatcher": "agent", // optional, the dispatcher's {name}
     "workspace": "/path/to/workspace", // optional, enables the dispatcher
     "ntfy": { "url": "https://ntfy.example.org" }, // optional, push wake-ups instead of long-polling (see Push)
+    // or, on an ntfy server that restricts reading topics:
+    // "ntfy": { "url": "...", "tokenFile": "/path/to/ntfy-token", "topicPrefix": "up_<person>_" }
     "maxDownloadMB": 50, // optional, largest file matrix_download fetches
     "debug": false
   }
@@ -159,9 +161,14 @@ delivery. Only outbound connections are needed from the OpenCode server.
 - `ntfy.url` is the ntfy server's `base-url`: ntfy only accepts push keys under it. The plugin subscribes there.
 - `ntfy.gateway` is where the homeserver posts, if it reaches ntfy at another address (default
   `<url>/_matrix/push/v1/notify`). Synapse refuses private addresses unless they are in `ip_range_whitelist`.
-- The topics must be readable without a token: ntfy's default, or `auth-access: "*:up*:rw"` with `auth-default-access:
-  deny-all`. The topic names are the secret, as for UnifiedPush on ntfy.sh. Synapse publishes for every account, so
-  exempt it from ntfy's rate limits (`visitor-request-limit-exempt-hosts`).
+- Anyone must be able to publish on the topics, since the homeserver can't authenticate to a push gateway. By
+  default they must also be readable without a token: ntfy's default, or `auth-access: "*:up*:rw"` with
+  `auth-default-access: deny-all`. The topic names are the secret, as for UnifiedPush on ntfy.sh.
+- On a server that restricts reading, `ntfy.tokenFile` is a file holding an ntfy access token (`tk_...`) the plugin
+  subscribes with, and `ntfy.topicPrefix` (default `up`, at most 32 characters) starts the topics, so that they fall
+  under the token's access rule. For instance `auth-access: ["*:up*:write-only", "jane.doe:up_jane-doe_*:rw"]` with
+  `topicPrefix: "up_jane-doe_"`. Changing the prefix gives existing accounts new topics.
+- Synapse publishes for every account, so exempt it from ntfy's rate limits (`visitor-request-limit-exempt-hosts`).
 - The appservice's user namespace must not be exclusive: Synapse only pushes invites to exclusive appservice users.
 - Pushes follow push rules. Besides the defaults (invites, mentions, DMs), the plugin adds two override rules to
   each account: every event in a two-member room, so notices and edits in DMs wake it up too, and every reaction.
@@ -172,7 +179,8 @@ delivery. Only outbound connections are needed from the OpenCode server.
 `bun install && bun test`. `index.test.ts` runs against the local Synapse (skipped if it is down) with a mock OpenCode context.
 `TEST_PERSON` and `TEST_LOCALPART` run it as another person and naming, after
 `../add-person.sh <person> --localpart <template>`. `TEST_NTFY=1` uses the stack's ntfy, after
-`../add-person.sh <person> --not-exclusive`.
+`../add-person.sh <person> --not-exclusive`. `TEST_NTFY=token` subscribes with the person's ntfy token, after
+`../add-person.sh <person> --not-exclusive --ntfy-token`.
 
 ## Known gaps
 

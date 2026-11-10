@@ -33,6 +33,13 @@ jobs:
             localpart: "{person}.{name}"
             flags: --not-exclusive
             ntfy: "1"
+          # The same through an ntfy that only lets the person's token read their topics, for a person whose name
+          # contains dots.
+          - name: ntfy-token
+            person: john.smith
+            localpart: "{person}+{name}"
+            flags: --not-exclusive --ntfy-token
+            ntfy: token
     env:
       TEST_PERSON: ${{ matrix.person }}
       TEST_LOCALPART: ${{ matrix.localpart }}

@@ -47,7 +47,7 @@ import {
   type StartOptions,
 } from "./commands.ts"
 import { checkClientPath, Matrix, MatrixError, readAsToken } from "./matrix.ts"
-import { newTopic, Ntfy, Waker } from "./push.ts"
+import { checkTopicPrefix, DEFAULT_TOPIC_PREFIX, newTopic, Ntfy, readNtfyToken, Waker } from "./push.ts"
 import { categories, describeOperation, findOperations, listLine, MAX_RESULTS, operations, searchOperations, specURL, type Operation } from "./openapi.ts"
 
 // One Matrix account per OpenCode session, created through the person's appservice token. An account is
@@ -77,9 +77,10 @@ export interface AgentMatrixOptions {
   /**
    * An ntfy server the homeserver pushes to: its `base-url`, and the URL of its Matrix push gateway as the homeserver
    * reaches it (default `<url>/_matrix/push/v1/notify`). With it, sync loops wait for push notifications instead of
-   * long-polling.
+   * long-polling. On a server that restricts reading topics, `tokenFile` holds an ntfy access token to subscribe with
+   * and `topicPrefix` (default `up`) starts the topics the token may read.
    */
-  ntfy?: { url: string; gateway?: string }
+  ntfy?: { url: string; gateway?: string; tokenFile?: string; topicPrefix?: string }
   /** Largest file matrix_download fetches, in MB. Default 50. */
   maxDownloadMB?: number
   debug?: boolean
@@ -181,7 +182,14 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   const matrix = new Matrix({ homeserver: options.homeserver, serverName: options.serverName, asToken: readAsToken(options.registration) })
   const state = shared()
   state.ctxs.add(ctx)
-  const ntfy = options.ntfy ? (state.ntfy ??= new Ntfy(options.ntfy.url, options.ntfy.gateway, (...args) => log(...args))) : undefined
+  const topicPrefix = options.ntfy?.topicPrefix ?? DEFAULT_TOPIC_PREFIX
+  checkTopicPrefix(topicPrefix)
+  const ntfy = options.ntfy
+    ? (state.ntfy ??= new Ntfy(
+        { url: options.ntfy.url, gateway: options.ntfy.gateway, token: options.ntfy.tokenFile && readNtfyToken(options.ntfy.tokenFile) },
+        (...args) => log(...args),
+      ))
+    : undefined
 
   const log = (...args: unknown[]) => {
     if (options.debug) console.error("[agent-matrix]", ...args)
@@ -296,8 +304,9 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   /** Points the account's pusher at its ntfy topic and follows the topic. */
   async function subscribe(key: string, userID: string, ntfy: Ntfy) {
     let topic = (await storage().get(`topic:${key}`)) as string | undefined
-    if (!topic) {
-      topic = newTopic()
+    // A topic from before topicPrefix changed may not be readable with the token any more.
+    if (!topic?.startsWith(topicPrefix)) {
+      topic = newTopic(topicPrefix)
       await storage().set(`topic:${key}`, topic)
     }
     const pushkey = ntfy.pushkey(topic)

@@ -21,7 +21,9 @@ Each person gets:
 
 `./add-person.sh <name> --localpart '{person}+{name}'` names the namespace like the plugin's `localpart` option
 (`@<name>+*`), and `--not-exclusive` lets other accounts be created in it too. Sessions then describe any account
-named like one of the person's agents as theirs (see the plugin's README).
+named like one of the person's agents as theirs (see the plugin's README). `--ntfy-token` also gives the person an
+ntfy token, and makes the stack's ntfy refuse anonymous reads of push topics, as a server with access control would
+(in `secrets/<name>-ntfy-token`, for the plugin's `ntfy.tokenFile`).
 
 The token is sent as a bearer token, with `?user_id=` set to the session's account
 to choose which session account is acting. The appservice has `url: null`: the

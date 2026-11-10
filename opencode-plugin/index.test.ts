@@ -9,10 +9,16 @@ import { readAsToken } from "./matrix.ts"
 // Runs against the local Synapse from ../setup.sh with person "ramiro" (../add-person.sh ramiro). TEST_PERSON and
 // TEST_LOCALPART test another person and naming (../add-person.sh <person> --localpart <template>). TEST_NTFY=1 wakes
 // the sync loops through the stack's ntfy instead of long-polling, so every delivery below then depends on a push.
+// TEST_NTFY=token subscribes with the person's ntfy token, to topics only it may read (../add-person.sh <person>
+// --ntfy-token).
 const HOMESERVER = "http://localhost:8008"
-const NTFY = process.env.TEST_NTFY ? { url: "http://localhost:8090", gateway: "http://ntfy/_matrix/push/v1/notify" } : undefined
 const ROOT = join(import.meta.dir, "..")
 const PERSON = process.env.TEST_PERSON ?? "ramiro"
+const NTFY_TOKEN =
+  process.env.TEST_NTFY === "token"
+    ? { tokenFile: join(ROOT, `secrets/${PERSON}-ntfy-token`), topicPrefix: `up_${PERSON.replaceAll(".", "-")}_` }
+    : undefined
+const NTFY = process.env.TEST_NTFY ? { url: "http://localhost:8090", gateway: "http://ntfy/_matrix/push/v1/notify", ...NTFY_TOKEN } : undefined
 const identity = { person: PERSON, serverName: "agents.local", localpart: process.env.TEST_LOCALPART ?? DEFAULT_LOCALPART, dispatcher: DEFAULT_DISPATCHER }
 const HUMAN = `@${PERSON}:agents.local`
 const DISPATCHER = `@${dispatcherLocalpart(identity)}:agents.local`
@@ -226,8 +232,16 @@ test.skipIf(!up)("mentioning a session in a team room invites it and notifies it
 test.skipIf(!up || !NTFY)("with ntfy, accounts get a pusher to their own topic", async () => {
   const pushers = (await asAccount(accountOf(WORKER), "/pushers")).pushers
   const topic = mock.store.get(`topic:${WORKER}`) as string
-  expect(topic).toMatch(/^up[A-Za-z0-9]{32}$/)
+  const prefix = NTFY_TOKEN?.topicPrefix ?? "up"
+  expect(topic.startsWith(prefix) && /^[A-Za-z0-9]{32}$/.test(topic.slice(prefix.length))).toBe(true)
   expect(pushers).toEqual([expect.objectContaining({ kind: "http", pushkey: `${NTFY!.url}/${topic}?up=1`, data: expect.objectContaining({ url: NTFY!.gateway }) })])
+})
+
+test.skipIf(!up || !NTFY_TOKEN)("with an ntfy token, the topics are only readable with it", async () => {
+  const poll = `${NTFY!.url}/${mock.store.get(`topic:${WORKER}`)}/json?poll=1`
+  expect((await fetch(poll)).status).toBe(403)
+  const token = readFileSync(NTFY_TOKEN!.tokenFile, "utf8").trim()
+  expect((await fetch(poll, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200)
 })
 
 test.skipIf(!up)("Threads workers get an account as soon as they are created", async () => {

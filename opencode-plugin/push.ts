@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto"
+import { readFileSync } from "node:fs"
 
 // Wake-ups through ntfy instead of long-polling /sync. Each account has a pusher that sends its notifications to
 // a secret ntfy topic (the homeserver posts to ntfy's Matrix push gateway); one stream per TOPICS_PER_STREAM
@@ -12,10 +13,24 @@ const RETRY_MS = 5_000
 /** Changes to the topics within this delay share one reconnect. */
 const RESTART_DELAY_MS = 1_000
 
-/** A random UnifiedPush topic: `up` and 32 letters and digits (190 bits). */
-export function newTopic() {
+/** An ntfy access token (`tk_...`) from a file holding only the token. */
+export function readNtfyToken(file: string) {
+  const token = readFileSync(file, "utf8").trim()
+  if (!/^\S+$/.test(token)) throw new Error(`${file} doesn't hold an ntfy token`)
+  return token
+}
+
+export const DEFAULT_TOPIC_PREFIX = "up"
+
+/** ntfy topics are at most 64 of these characters, and the random part takes 32. */
+export function checkTopicPrefix(prefix: string) {
+  if (!/^[-_A-Za-z0-9]{1,32}$/.test(prefix)) throw new Error(`ntfy topicPrefix "${prefix}" must be 1 to 32 letters, digits, "-" or "_"`)
+}
+
+/** A random topic: the prefix (a UnifiedPush `up` by default) and 32 letters and digits (190 bits). */
+export function newTopic(prefix = DEFAULT_TOPIC_PREFIX) {
   const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-  return "up" + [...randomBytes(32)].map((byte) => alphabet[byte % alphabet.length]).join("")
+  return prefix + [...randomBytes(32)].map((byte) => alphabet[byte % alphabet.length]).join("")
 }
 
 /** Wakes a sync loop. A wake-up while the loop is busy is kept for its next wait. */
@@ -56,15 +71,19 @@ export class Ntfy {
 
   readonly url: string
   readonly gateway: string
+  private readonly headers: Record<string, string>
 
-  /** `url` must be the ntfy server's base-url, which it requires as the push keys' prefix. */
+  /**
+   * `url` must be the ntfy server's base-url, which it requires as the push keys' prefix. `token`, if given, is an
+   * ntfy access token the streams subscribe with.
+   */
   constructor(
-    url: string,
-    gateway: string | undefined,
+    { url, gateway, token }: { url: string; gateway?: string; token?: string },
     private readonly log: (...args: unknown[]) => void,
   ) {
     this.url = url.replace(/\/+$/, "")
     this.gateway = gateway ?? `${this.url}/_matrix/push/v1/notify`
+    this.headers = token ? { Authorization: `Bearer ${token}` } : {}
   }
 
   pushkey(topic: string) {
@@ -109,7 +128,7 @@ export class Ntfy {
       signal.addEventListener("abort", abort, { once: true })
       let idle = setTimeout(abort, STREAM_IDLE_MS)
       try {
-        const response = await fetch(`${this.url}/${topics.join(",")}/json`, { signal: request.signal })
+        const response = await fetch(`${this.url}/${topics.join(",")}/json`, { headers: this.headers, signal: request.signal })
         if (!response.ok || !response.body) throw new Error(`ntfy: ${response.status}`)
         let buffer = ""
         for await (const chunk of response.body.pipeThrough(new TextDecoderStream()) as unknown as AsyncIterable<string>) {
