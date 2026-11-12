@@ -174,6 +174,17 @@ delivery. Only outbound connections are needed from the OpenCode server.
   each account: every event in a two-member room, so notices and edits in DMs wake it up too, and every reaction.
 - A deleted session's pusher is removed.
 
+## Matrix panel
+
+On OpenCode 2.2 and later, the plugin also adds a **Matrix** tab to each session's side region, in the web UI and the
+desktop app: the session's rooms and DMs with their latest messages, most recently active first. Open it from the side
+region's **+** menu or with the **Show Matrix messages** command. It updates as the session sends and receives
+messages. It reads them through the plugin (its `agent-matrix` RPC, `session` method), so the agent token never
+reaches the browser. A session that hasn't used Matrix shows no account; opening the tab doesn't create one.
+
+The GUI part is `gui.tsx`, built into `dist/gui-experimental.cjs` with `npm run build`; release packages ship it
+prebuilt. Older OpenCode versions don't load it, and the rest of the plugin works as before.
+
 ## Tests
 
 `bun install && bun test`. `index.test.ts` runs against the local Synapse (skipped if it is down) with a mock OpenCode context.
