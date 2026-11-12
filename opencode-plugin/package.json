@@ -9,15 +9,25 @@
   "files": [
     "*.ts",
     "!*.test.ts",
+    "!vite.config.ts",
+    "dist/gui-experimental.cjs",
     "npm-shrinkwrap.json"
   ],
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./gui-experimental": "./dist/gui-experimental.cjs"
   },
   "scripts": {
+    "build": "vite build",
     "test": "bun test"
   },
   "dependencies": {
     "marked": "18.1.0"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.2.7",
+    "solid-js": "1.9.19",
+    "vite": "7.3.8",
+    "vite-plugin-solid": "2.11.16"
   }
 }

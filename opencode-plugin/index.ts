@@ -48,6 +48,7 @@ import {
 } from "./commands.ts"
 import { checkClientPath, Matrix, MatrixError, readAsToken } from "./matrix.ts"
 import { checkTopicPrefix, DEFAULT_TOPIC_PREFIX, newTopic, Ntfy, readNtfyToken, Waker } from "./push.ts"
+import { AgentMatrixRpc, type SessionMessages } from "./rpc.ts"
 import { categories, describeOperation, findOperations, listLine, MAX_RESULTS, operations, searchOperations, specURL, type Operation } from "./openapi.ts"
 
 // One Matrix account per OpenCode session, created through the person's appservice token. An account is
@@ -129,6 +130,8 @@ interface SharedState {
   /** Read receipts sent once a model call of the session includes the message (any message, without `eventId`). */
   unread: Map<string, PendingReceipt[]>
   ntfy?: Ntfy
+  /** RPC registrations for the GUI, one per plugin instance; any of them can emit. */
+  rpcs: Set<any>
 }
 interface PendingReceipt {
   userID: string
@@ -141,6 +144,7 @@ const STATE_KEY = Symbol.for("agent-matrix.state")
 function shared(): SharedState {
   const state = ((globalThis as any)[STATE_KEY] ??= { ctxs: new Set(), loops: new Map(), ensuring: new Map(), running: new Set() })
   state.unread ??= new Map()
+  state.rpcs ??= new Set()
   return state
 }
 
@@ -491,6 +495,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
       resume: true,
     })
     log("delivered", sessionID, received.length)
+    updated(sessionID)
     const lastPerRoom = new Map(received.map((message) => [message.roomId, message.eventId]))
     for (const [roomId, eventId] of lastPerRoom) markReadWhenSeen(sessionID, { userID, roomId, receipt: eventId, eventId })
   }
@@ -851,6 +856,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
           }
         : content,
     )
+    updated(sessionID)
     return { from: self, room: roomId, event_id: eventId }
   }
 
@@ -940,6 +946,41 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
       return found.length > MAX_RESULTS ? `${shown.join("\n")}\n[${found.length - MAX_RESULTS} more; narrow the search]` : shown.join("\n")
     }
     return `Categories (endpoints), searchable by name: ${categories(all).join(", ")}`
+  }
+
+  /** A session's rooms with their latest messages, most recently active first, for the GUI's Matrix panel. */
+  async function sessionMessages(sessionID: string, limit = 10): Promise<SessionMessages> {
+    const account = (await storage().get(`account:${sessionID}`)) as { userID: string } | undefined
+    if (!account) return { account: null, rooms: [] }
+    const self = account.userID
+    const rooms = await Promise.all(
+      (await matrix.joinedRooms(self)).map(async (roomId) => {
+        const dmWith = (await storage().get(`dmroom:${sessionID}:${roomId}`)) as string | undefined
+        const { messages } = await matrix.messages(self, roomId, limit)
+        return {
+          roomId,
+          label: dmWith ? `DM with ${dmWith}` : await roomLabel(self, roomId),
+          messages: await Promise.all(
+            messages.map(async (event) => ({
+              eventId: event.event_id,
+              sender: event.sender,
+              senderName: await senderName(self, event.sender),
+              relation: describeSender(identity, event.sender, self),
+              time: event.origin_server_ts,
+              body: messageText(event.content),
+            })),
+          ),
+        }
+      }),
+    )
+    const latest = (room: { messages: { time: number }[] }) => room.messages.at(-1)?.time ?? 0
+    return { account: self, rooms: rooms.sort((a, b) => latest(b) - latest(a)) }
+  }
+
+  /** Tells the GUI that a session's messages changed. */
+  function updated(sessionID: string) {
+    const rpc = state.rpcs.values().next().value
+    rpc?.events.emit("updated", { sessionID }).catch((error: unknown) => log("rpc event failed", error))
   }
 
   async function rooms(sessionID: string) {
@@ -1129,6 +1170,13 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   })
 
   // Runs before each model call of the agent loop, with the messages it sends.
+  // OpenCode 2.2+ only: the GUI's Matrix panel reads sessions' messages through this RPC.
+  const rpc =
+    typeof ctx.rpc?.register === "function"
+      ? await ctx.rpc.register(AgentMatrixRpc, { session: (input: any) => sessionMessages(input.sessionID, input.limit) })
+      : undefined
+  if (rpc) state.rpcs.add(rpc)
+
   const contextHook = await ctx.session.hook("context", (event: any) => sendSeenReceipts(event.sessionID, event.messages))
 
   const events = new AbortController()
@@ -1208,6 +1256,10 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
   return async () => {
     events.abort()
     await contextHook.dispose()
+    if (rpc) {
+      state.rpcs.delete(rpc)
+      await rpc.dispose?.()
+    }
     state.ctxs.delete(ctx)
     if (state.ctxs.size === 0) {
       for (const controller of state.loops.values()) controller.abort()

@@ -45,6 +45,8 @@ function mockCtx() {
   const calls: any[] = []
   const tools = new Map<string, any>()
   const hooks = new Map<string, (input: any) => unknown>()
+  const rpcs = new Map<string, any>()
+  const rpcEvents: { name: string; data: unknown }[] = []
   const queue: any[] = []
   let wake = () => {}
   return {
@@ -55,6 +57,8 @@ function mockCtx() {
     prompts,
     calls,
     tools,
+    rpcs,
+    rpcEvents,
     emit(event: any) {
       queue.push(event)
       wake()
@@ -141,6 +145,12 @@ function mockCtx() {
         }),
       },
       tool: { transform: async (callback: any) => callback({ add: (tool: any) => tools.set(tool.name, tool) }) },
+      rpc: {
+        register: async (definition: { id: string }, handlers: any) => {
+          rpcs.set(definition.id, handlers)
+          return { events: { emit: async (name: string, data: unknown) => void rpcEvents.push({ name, data }) }, dispose: async () => {} }
+        },
+      },
       event: {
         subscribe: ({ signal }: { signal: AbortSignal }) => ({
           async *[Symbol.asyncIterator]() {
@@ -552,3 +562,15 @@ test.skipIf(!up)("the dispatcher declines invites from anyone but its person", a
   expect(await members()).not.toContain(DISPATCHER)
   expect(mock.prompts.some((input) => input.text.includes("start something"))).toBe(false)
 }, 30_000)
+
+test.skipIf(!up)("the GUI's RPC lists a session's rooms with their latest messages, and is told when they change", async () => {
+  const session = mock.rpcs.get("agent-matrix").session
+  expect(await session({ sessionID: `ses_${run}NeverUsedMatrix` })).toEqual({ account: null, rooms: [] })
+  const before = mock.rpcEvents.length
+  await call("matrix_send", LEAD, { to: "user", text: "for the panel" })
+  const result = await session({ sessionID: LEAD })
+  expect(result.account).toBe(accountOf(LEAD))
+  const dm = result.rooms.find((room: any) => room.label === `DM with ${HUMAN}`)
+  expect(dm.messages.at(-1)).toMatchObject({ sender: accountOf(LEAD), relation: "you", body: "for the panel" })
+  expect(mock.rpcEvents.slice(before)).toContainEqual({ name: "updated", data: { sessionID: LEAD } })
+})
