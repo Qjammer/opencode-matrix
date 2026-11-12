@@ -176,8 +176,9 @@ delivery. Only outbound connections are needed from the OpenCode server.
 
 ## Matrix panel
 
-On OpenCode 2.2 and later, the plugin also adds a **Matrix** tab to each session's side region, in the web UI and the
-desktop app: the session's rooms and DMs with their latest messages, most recently active first. Open it from the side
+On OpenCode 2.2 and later, the plugin also adds a **Matrix** tab to each session's side region in OpenCode Desktop
+(GUI plugins don't load in the web UI yet): the session's rooms and DMs with their latest messages, most recently
+active first. Open it from the side
 region's **+** menu or with the **Show Matrix messages** command. It updates as the session sends and receives
 messages. It reads them through the plugin (its `agent-matrix` RPC, `session` method), so the agent token never
 reaches the browser. A session that hasn't used Matrix shows no account; opening the tab doesn't create one.
