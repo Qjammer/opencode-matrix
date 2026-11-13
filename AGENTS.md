@@ -16,6 +16,7 @@ agent=plan dir=web/api model=sonnet#high why is the login test flaky?   # option
 !help                         # agents, directories, models
 !sessions                     # recent sessions with links to their DMs
 !default dir=web/api          # this room's defaults (!default clear)
+!rename Laptop                # the dispatcher's display name, to tell machines apart in a shared room
 ```
 
 In a session's DM: `!status`, `!agent <agent>`, `!model <model>[#variant]`, `!rename <name>`, `!stop`, `!help`. Anything else goes

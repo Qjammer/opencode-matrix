@@ -391,6 +391,17 @@ test.skipIf(!up)("options pick the agent, model and directory; !commands control
   expect(mock.created.at(-1)).toMatchObject({ agent: "plan", location: { directory: WORKSPACE } })
   await say(room, "!sessions")
   expect(await replyIn(room, dispatcher, "Recent sessions:")).toContain(`${prompt.sessionID} [idle] Config review`)
+
+  await say(room, "!rename")
+  await replyIn(room, dispatcher, "Usage: !rename <name>")
+  await say(room, `!rename Laptop ${run}`)
+  await replyIn(room, dispatcher, `Renamed to Laptop ${run}.`)
+  expect((await human(`/profile/${encodeURIComponent(dispatcher)}/displayname`, "GET")).displayname).toBe(`Laptop ${run}`)
+  expect(mock.store.get("displayname:agent")).toBe(`Laptop ${run}`)
+  // A leading mention by the new name isn't part of the prompt.
+  await say(room, `Laptop ${run}: check the disks ${run}`)
+  const mentioned = await waitFor(() => mock.prompts.find((input) => input.text.includes(`check the disks ${run}`)))
+  expect(mentioned.text).not.toContain(`Laptop ${run}:`)
 }, 90_000)
 
 test.skipIf(!up)("a file is uploaded and sent with the text as its caption; files outside the allowed directories are refused", async () => {

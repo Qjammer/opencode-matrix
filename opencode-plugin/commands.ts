@@ -157,6 +157,7 @@ export function dispatcherHelp(agents: readonly string[], dirs: readonly string[
     "Commands:",
     "  !sessions: recent sessions started here",
     "  !default [options | clear]: show, set or clear this room's default options",
+    "  !rename <name>: change this dispatcher's display name, e.g. to tell machines apart",
     "  !help",
     "",
     `Agents: ${agents.join(", ")}`,

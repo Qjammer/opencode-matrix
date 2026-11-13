@@ -40,7 +40,7 @@ Leading `key=value` options choose the session's settings; parsing stops at the 
 
 Invalid values get an error listing the valid ones; no session is started. Dispatcher commands: `!help`,
 `!sessions` (the last 10 it started), `!default [options | clear]` (per-room defaults, merged under the message's
-options).
+options), `!rename <name>` (its display name, "New session" by default).
 
 `!commands` from the human in a session's DM control that session instead of reaching it: `!status`,
 `!agent <agent>`, `!model <model>[#variant]`, `!rename <name>` (session title, display name and DM room name),
@@ -145,7 +145,8 @@ registration is open), and would be described the same way. This only affects th
 only the person's own account is treated as giving instructions.
 
 `dispatcher` names the dispatcher, for instance when two OpenCode servers of the same person use one homeserver and
-each needs its own.
+each needs its own. With both dispatchers in one room, mentioning one starts a session on its machine only; `!rename`
+gives each a display name of its own, so they can be told apart there.
 
 ## Push
 

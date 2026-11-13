@@ -88,6 +88,8 @@ export interface AgentMatrixOptions {
 
 /** The dispatcher's key in loops and storage, whatever its account is called. */
 const DISPATCHER = "agent"
+/** The dispatcher's display name until `!rename` changes it. */
+const DISPATCHER_NAME = "New session"
 const SYNC_TIMEOUT_MS = 30_000
 /** With ntfy, a loop also syncs this long after its last sync, in case a notification was lost. */
 const PUSH_POLL_MS = 5 * 60_000
@@ -568,8 +570,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     if (state.loops.has(DISPATCHER)) return
     const human = humanID(identity)
     const userID = await matrix.register(dispatcherLocalpart(identity))
-    const name = "New session"
-    await matrix.setDisplayName(userID, name)
+    await matrix.setDisplayName(userID, await dispatcherName())
     startSyncLoop(DISPATCHER, userID, async (response, initial) => {
       await acceptInvites(DISPATCHER, userID, response, human)
       if (initial) return
@@ -582,7 +583,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
           await storage().set(`started:${event.event_id}`, true)
           const attachment = messageAttachment(event.content)
           const body = attachment ? messageText(event.content) : String(event.content?.body ?? "")
-          const text = stripMention(body.trim(), [userID, name])
+          const text = stripMention(body.trim(), [userID, await dispatcherName()])
           // A started session marks the message read when its model first runs; anything else is handled here.
           const started = await dispatch(workspace, userID, roomId, event.event_id, text, attachment).catch(async (error) => {
             await notifyFailure(userID, roomId, "Could not start a session", error)
@@ -601,6 +602,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     if (command?.name === "help") return reply(await dispatcherHelpText(workspace))
     if (command?.name === "sessions") return reply(await recentSessions())
     if (command?.name === "default") return reply(await roomDefaults(workspace, roomId, command.args))
+    if (command?.name === "rename") return reply(await renameDispatcher(dispatcher, command.args))
     if (command) return reply(`Unknown command !${command.name}.\n\n${await dispatcherHelpText(workspace)}`)
 
     const { options, rest } = parseOptions(text)
@@ -711,6 +713,19 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     if (typeof settings === "string") return settings
     await storage().set(key, merged)
     return `Defaults for this room: ${describe(merged)}`
+  }
+
+  async function dispatcherName() {
+    return ((await storage().get(`displayname:${DISPATCHER}`)) as string | undefined) ?? DISPATCHER_NAME
+  }
+
+  /** Display names tell apart the dispatchers of several machines in one room; the account itself keeps its ID. */
+  async function renameDispatcher(dispatcher: string, args: string) {
+    if (!args) return "Usage: !rename <name>"
+    const name = args.slice(0, 100)
+    await matrix.setDisplayName(dispatcher, name)
+    await storage().set(`displayname:${DISPATCHER}`, name)
+    return `Renamed to ${name}.`
   }
 
   async function notifyFailure(dispatcher: string, roomId: string, what: string, error: unknown) {

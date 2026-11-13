@@ -67,6 +67,9 @@ test("senders are described relative to the receiving session", () => {
   expect(describeSender(identity, "@ramiro.ses_b:agents.local", self)).toBe("another of your user's agent sessions")
   expect(describeSender(identity, "@marta.ses_c:agents.local", self)).toBe("an agent session of marta")
   expect(describeSender(identity, "@marta:agents.local", self)).toBe("a person (marta)")
+  // People whose names have a dot aren't taken for someone's agents.
+  expect(describeSender(identity, "@marta.lopez:agents.local", self)).toBe("a person (marta.lopez)")
+  expect(describeSender(identity, "@ramiro.smith:agents.local", self)).toBe("a person (ramiro.smith)")
 })
 
 test("senders are described by whose agent they are, with dots in people's names", () => {
