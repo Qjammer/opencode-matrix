@@ -40,7 +40,8 @@ Leading `key=value` options choose the session's settings; parsing stops at the 
 
 Invalid values get an error listing the valid ones; no session is started. Dispatcher commands: `!help`,
 `!sessions` (the last 10 it started), `!default [options | clear]` (per-room defaults, merged under the message's
-options), `!rename <name>` (its display name, "New session" by default).
+options), `!rename <name>` (its display name, "New session" by default), and `!machine`, `!trust <key> [@owner]` and
+`!untrust <key>` (see [Machine keys](#machine-keys)).
 
 `!commands` from the human in a session's DM control that session instead of reaching it: `!status`,
 `!agent <agent>`, `!model <model>[#variant]`, `!rename <name>` (session title, display name and DM room name),
@@ -80,7 +81,8 @@ with who gave them (removed ones are redacted, so they drop out), from the react
 fetching the messages.
 
 `matrix_api` is a convenience, not a boundary: the appservice registration is readable by the `opencode` user,
-so a session could use the as_token directly.
+so a session could use the as_token directly. Events it sends are not signed (see [Machine keys](#machine-keys)), so
+they read as a person's.
 
 ## Client quirks
 
@@ -127,6 +129,8 @@ its renderer, `lib/pages/chat/events/html_message.dart`. Other clients were not 
     "ntfy": { "url": "https://ntfy.example.org" }, // optional, push wake-ups instead of long-polling (see Push)
     // or, on an ntfy server that restricts reading topics:
     // "ntfy": { "url": "...", "tokenFile": "/path/to/ntfy-token", "topicPrefix": "up_<person>_" }
+    "machineKey": "/path/to/machine-key.pem", // optional, signs the agents' messages (see Machine keys)
+    "trustedMachines": [{ "key": "<public key>", "owner": "@marta:example.org" }], // optional, besides !trust
     "maxDownloadMB": 50, // optional, largest file matrix_download fetches
     "debug": false
   }
@@ -139,14 +143,69 @@ The default, `{person}.{name}`, gives `@ramiro.ses_abc123` and `@ramiro.agent`. 
 contain dots, `{person}+{name}` keeps them apart from people's own accounts (`@jane.doe+ses_abc123` next to
 `@jane.doe`). Changing it only affects accounts created afterwards; existing sessions keep theirs.
 
-Sessions describe senders whose names match `localpart` as agent sessions of that person. If the appservice's
-namespace isn't exclusive, other accounts can be created with such names (by the homeserver's admins, or by anyone if
-registration is open), and would be described the same way. This only affects the description: whatever the label,
-only the person's own account is treated as giving instructions.
-
 `dispatcher` names the dispatcher, for instance when two OpenCode servers of the same person use one homeserver and
 each needs its own. With both dispatchers in one room, mentioning one starts a session on its machine only; `!rename`
 gives each a display name of its own, so they can be told apart there.
+
+## Machine keys
+
+Sessions are told whose agent sent a message ("another of your user's agent sessions", "an agent session of
+@marta:example.org") only when the message proves it; an account's name proves nothing. Any other sender reads as
+a person. Either way, only the person's own account is treated as giving instructions.
+
+Each machine running agents has an Ed25519 key pair, and signs every event its agents send with it. Whose machine a
+key is, each machine decides for itself: it trusts its own key (as the person's), the keys in `trustedMachines`, and
+those its person trusted through the dispatcher:
+
+- `!machine`: this machine's public key, and the machines it trusts.
+- `!trust <key> [@owner]`: messages signed with `key` read as `@owner`'s agents (the person's by default). Only trust
+  a key that machine's own dispatcher showed you.
+- `!untrust <key>`: takes effect at once, on this machine only. Every machine that trusts a key has to drop it.
+
+### Setup
+
+Generate the key once per machine, readable by the OpenCode server only, and point `machineKey` at it:
+
+```sh
+openssl genpkey -algorithm ed25519 -out /etc/agent-matrix/machine-key.pem
+chmod 600 /etc/agent-matrix/machine-key.pem
+```
+
+The plugin refuses to start if the file is missing. Keep it across reinstalls: a new key means other machines have to
+trust it again. Without `machineKey`, the plugin signs nothing, so its agents read as people everywhere (it still
+recognizes trusted machines' agents).
+
+**Give each machine its own appservice registration**, with its own token and user namespace (e.g. `localpart`
+`{person}.laptop.{name}` on a laptop). Anyone holding a machine's token can send as its accounts: they can't sign, so
+their messages read as a person's, but they can break the sequence that makes the real agent's next message verify.
+
+Agents run as the same OS user as the plugin, so they can read the key, as they can read the appservice token.
+
+### Format
+
+For other harnesses to sign and check messages the same way. Every event an agent sends (messages, edits,
+reactions...) carries in its content:
+
+```json
+"io.github.qjammer.agent_matrix.signed": { "machine": "<public key>", "anchor": "<event ID>", "signature": "<signature>" }
+```
+
+- `machine`: the raw 32-byte Ed25519 public key, unpadded base64 (43 characters).
+- `anchor`: the ID of the room's latest event (`GET /rooms/{roomId}/messages?dir=b&limit=1`) just before sending.
+- `signature`: Ed25519, unpadded base64, over the [canonical JSON](https://spec.matrix.org/latest/appendices/#canonical-json)
+  of:
+
+  ```json
+  { "type": "io.github.qjammer.agent_matrix.signed", "room_id": "...", "sender": "...", "event_type": "...",
+    "content": { ...the content without the signed field }, "machine": "...", "anchor": "..." }
+  ```
+
+A receiver accepts the event as coming from `machine` if the signature verifies and, among the (up to 50) events
+before it (`GET /rooms/{roomId}/context/{eventId}`), it reaches `anchor` with no non-state event from the same sender
+in between. A copy of a signed event sent again, in the same room and as the same account, carries the original's
+anchor with the original (or its redaction) in between, so it fails. A sender must therefore send its events to a
+room one at a time: reading the anchor, then sending. In a federated room, servers can rarely order events
+differently, so a genuine event may fail the check on another server.
 
 ## Push
 

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import type { UnsignedEvent } from "./machine.ts"
 
 // Minimal Matrix client-server API client acting through an appservice token. Every call names the
 // account it acts as (`?user_id=`), which must be inside the appservice's exclusive namespace.
@@ -10,6 +11,8 @@ export interface MatrixOptions {
   homeserver: string
   serverName: string
   asToken: string
+  /** Signs an event's content against its anchor (see machine.ts); without it, events are sent unsigned. */
+  sign?: (event: UnsignedEvent, anchor: string) => Record<string, unknown>
 }
 
 export class MatrixError extends Error {
@@ -69,6 +72,8 @@ export function dispositionFilename(header: string): string | undefined {
 }
 
 let txnCounter = 0
+/** The last signed send of each account to each room, across plugin instances. */
+const sending = new Map<string, Promise<string>>()
 
 export class Matrix {
   constructor(readonly options: MatrixOptions) {}
@@ -175,9 +180,41 @@ export class Matrix {
     return this.sendEvent(as, roomId, "m.room.message", content)
   }
 
-  async sendEvent(as: string, roomId: string, type: string, content: Record<string, unknown>): Promise<string> {
+  /**
+   * With `sign`, an account's events to a room go out one at a time, each signed with the room's latest event as its
+   * anchor (see machine.ts), so no event of its own lies between an event and its anchor.
+   */
+  sendEvent(as: string, roomId: string, type: string, content: Record<string, unknown>): Promise<string> {
+    const sign = this.options.sign
+    if (!sign) return this.put(as, roomId, type, content)
+    const key = `${as} ${roomId}`
+    const sent = (sending.get(key) ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        const anchor = await this.latestEvent(as, roomId)
+        return this.put(as, roomId, type, anchor ? sign({ roomId, sender: as, type, content }, anchor) : content)
+      })
+    sending.set(key, sent)
+    sent.catch(() => {}).finally(() => sending.get(key) === sent && sending.delete(key))
+    return sent
+  }
+
+  private async put(as: string, roomId: string, type: string, content: Record<string, unknown>): Promise<string> {
     const txn = `${Date.now()}-${++txnCounter}`
     return (await this.request("PUT", `/rooms/${encodeURIComponent(roomId)}/send/${encodeURIComponent(type)}/${txn}`, as, { body: content })).event_id
+  }
+
+  async latestEvent(as: string, roomId: string): Promise<string | undefined> {
+    return (await this.request("GET", `/rooms/${encodeURIComponent(roomId)}/messages`, as, { query: { dir: "b", limit: "1" } })).chunk?.[0]?.event_id
+  }
+
+  /** Up to `limit` events before `eventId`, newest first. */
+  async eventsBefore(as: string, roomId: string, eventId: string, limit: number): Promise<any[]> {
+    // The server splits `limit` between the events before and after.
+    const response = await this.request("GET", `/rooms/${encodeURIComponent(roomId)}/context/${encodeURIComponent(eventId)}`, as, {
+      query: { limit: String(limit * 2) },
+    })
+    return response.events_before ?? []
   }
 
   /** Public read receipt: the sender's client shows `as` as having read up to `eventId`. */

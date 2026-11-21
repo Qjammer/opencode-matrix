@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { generateKeyPairSync } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DEFAULT_DISPATCHER, DEFAULT_LOCALPART, dispatcherLocalpart, sessionLocalpart } from "./format.ts"
 import plugin from "./index.ts"
+import { loadMachineKey, SIGNED_FIELD, signEvent } from "./machine.ts"
 import { readAsToken } from "./matrix.ts"
 
 // Runs against the local Synapse from ../setup.sh with person "ramiro" (../add-person.sh ramiro). TEST_PERSON and
@@ -32,6 +34,13 @@ const WORKER = `ses_${run}Worker`
 const SPAWNED = `ses_${run}Spawned`
 const WORKSPACE = mkdtempSync(join(tmpdir(), "workspace-"))
 mkdirSync(join(WORKSPACE, "server/common-infra/.git"), { recursive: true })
+const KEYS = mkdtempSync(join(tmpdir(), "machine-keys-"))
+function machineKeyFile(name: string) {
+  const path = join(KEYS, `${name}.pem`)
+  writeFileSync(path, generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" }))
+  return path
+}
+const MACHINE_KEY = machineKeyFile("this")
 
 function mockCtx() {
   const store = new Map<string, unknown>()
@@ -72,6 +81,7 @@ function mockCtx() {
         registration: REGISTRATION,
         workspace: WORKSPACE,
         ntfy: NTFY,
+        machineKey: MACHINE_KEY,
       },
       storage: {
         get: async (key: string) => store.get(key),
@@ -503,7 +513,7 @@ test.skipIf(!up)("sessions see event IDs, replies with the quoted message, and e
   await expect(call("matrix_send", LEAD, { to: "user", text: "x", reply_to: question.event_id })).rejects.toThrow("No event")
 
   const reaction = JSON.parse((await call("matrix_react", LEAD, { room: WORKER, event: answer.event_id, key: "✅" })).content)
-  expect((await event(reaction)).content).toEqual({ "m.relates_to": { rel_type: "m.annotation", event_id: answer.event_id, key: "✅" } })
+  expect((await event(reaction)).content).toMatchObject({ "m.relates_to": { rel_type: "m.annotation", event_id: answer.event_id, key: "✅" } })
 
   // A reaction to a session's own message reaches it (waking it); reactions to other messages do not.
   const reacted = await waitFor(noticeFor(WORKER, `reacted ✅ to your message ${answer.event_id}: "port 8448 ${run}"`))
@@ -549,6 +559,73 @@ test.skipIf(!up)("a failed session tells the human in their DM", async () => {
     return messages.chunk?.some((event: any) => event.content?.body === "This session stopped with an error: quota exceeded")
   })
 }, 30_000)
+
+let rawTxn = 0
+/** Sends as one of the person's appservice accounts, as anyone holding the appservice token could. */
+async function sendAs(userID: string, room: string, content: Record<string, unknown>): Promise<string> {
+  const params = new URLSearchParams({ user_id: userID })
+  const response: any = await fetch(`${HOMESERVER}/_matrix/client/v3/rooms/${encodeURIComponent(room)}/send/m.room.message/raw${run}-${++rawTxn}?${params}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${readAsToken(REGISTRATION)}` },
+    body: JSON.stringify(content),
+  }).then((r) => r.json())
+  if (!response.event_id) throw new Error(`send failed: ${JSON.stringify(response)}`)
+  return response.event_id
+}
+
+/** How the session's notice of the event describes its sender. */
+async function describedAs(sessionID: string, eventId: string) {
+  const notice = await waitFor(noticeFor(sessionID, eventId))
+  const escaped = eventId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`, ([^,\\n]+), \\d\\d:\\d\\d UTC, ${escaped}:`).exec(notice.text)?.[1]
+}
+
+test.skipIf(!up)("agents are recognized by their machine's signature; unsigned, replayed and untrusted messages read as a person's", async () => {
+  const sent = JSON.parse((await call("matrix_send", LEAD, { to: WORKER, text: `signed ${run}` })).content)
+  const lead = sent.from as string
+  const room = sent.room as string
+  const person = `a person (${lead.slice(1).split(":")[0]})`
+  expect(await describedAs(WORKER, sent.event_id)).toBe("another of your user's agent sessions")
+  const original = await asAccount(lead, `/rooms/${encodeURIComponent(room)}/event/${encodeURIComponent(sent.event_id)}`)
+  expect(original.content[SIGNED_FIELD]).toMatchObject({ machine: loadMachineKey(MACHINE_KEY).id })
+
+  // With the appservice token but without the machine key: unsigned, or a signed message sent again.
+  expect(await describedAs(WORKER, await sendAs(lead, room, { msgtype: "m.text", body: `unsigned ${run}` }))).toBe(person)
+  expect(await describedAs(WORKER, await sendAs(lead, room, original.content))).toBe(person)
+
+  // Another machine's signature counts once this machine trusts it, as whose it was trusted.
+  const other = loadMachineKey(machineKeyFile("other"))
+  const signedByOther = async (body: string) => {
+    const latest = await asAccount(lead, `/rooms/${encodeURIComponent(room)}/messages`, { dir: "b", limit: "1" })
+    const content = signEvent(other, { roomId: room, sender: lead, type: "m.room.message", content: { msgtype: "m.text", body } }, latest.chunk[0].event_id)
+    return sendAs(lead, room, content)
+  }
+  expect(await describedAs(WORKER, await signedByOther(`untrusted ${run}`))).toBe(person)
+
+  const { human } = await loginHuman()
+  let txn = 0
+  const say = (room: string, body: string) =>
+    human(`/rooms/${encodeURIComponent(room)}/send/m.room.message/m${run}-${++txn}`, "PUT", { msgtype: "m.text", body })
+  const replyIn = (room: string, text: string) =>
+    waitForAsync(async () => {
+      const messages = await human(`/rooms/${encodeURIComponent(room)}/messages?dir=b&limit=20`, "GET")
+      return messages.chunk?.find((event: any) => event.sender === DISPATCHER && event.content?.body?.includes(text))?.content.body as string
+    })
+  const { room_id: dm } = await human("/createRoom", "POST", { preset: "trusted_private_chat", is_direct: true, invite: [DISPATCHER] })
+  await waitForAsync(async () => (await human(`/rooms/${encodeURIComponent(dm)}/joined_members`, "GET")).joined?.[DISPATCHER])
+
+  await say(dm, "!trust nonsense")
+  await replyIn(dm, "Usage: !trust <key> [@owner]")
+  await say(dm, `!trust ${other.id} @marta:agents.local`)
+  expect(await replyIn(dm, `Trusted ${other.id}`)).toContain("Only trust a key that machine's own dispatcher showed you")
+  await say(dm, "!machine")
+  expect(await replyIn(dm, "This machine's key:")).toContain(`${other.id}: @marta:agents.local (!trust)`)
+  expect(await describedAs(WORKER, await signedByOther(`trusted ${run}`))).toBe("an agent session of @marta:agents.local")
+
+  await say(dm, `!untrust ${other.id}`)
+  await replyIn(dm, `No longer trusting ${other.id}.`)
+  expect(await describedAs(WORKER, await signedByOther(`untrusted again ${run}`))).toBe(person)
+}, 90_000)
 
 test.skipIf(!up)("the dispatcher declines invites from anyone but its person", async () => {
   const sent = JSON.parse((await call("matrix_send", LEAD, { to: `@${dispatcherLocalpart(identity)}`, text: "start something" })).content)

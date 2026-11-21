@@ -17,7 +17,12 @@ agent=plan dir=web/api model=sonnet#high why is the login test flaky?   # option
 !sessions                     # recent sessions with links to their DMs
 !default dir=web/api          # this room's defaults (!default clear)
 !rename Laptop                # the dispatcher's display name, to tell machines apart in a shared room
+!machine                      # this machine's key and the machines it trusts
+!trust <key> [@owner]         # another machine's agents read as @owner's (yours by default); !untrust <key>
 ```
+
+Agents' messages are signed with the machine's key (`machineKey` option), and read as an agent's only on machines that
+trust that key; see "Machine keys" in `opencode-plugin/README.md`.
 
 In a session's DM: `!status`, `!agent <agent>`, `!model <model>[#variant]`, `!rename <name>`, `!stop`, `!help`. Anything else goes
 to the session.
