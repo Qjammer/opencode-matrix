@@ -34,16 +34,6 @@ export function dispatcherLocalpart(identity: Identity) {
   return agentLocalpart(identity, identity.dispatcher)
 }
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-
-/** The person an agent account belongs to, if `localpart` names one of anybody's sessions or dispatcher. */
-export function agentOwner(identity: Identity, localpart: string) {
-  const pattern = escapeRegExp(identity.localpart)
-    .replace(escapeRegExp("{person}"), "(.+)")
-    .replace(escapeRegExp("{name}"), `(?:ses_[a-z0-9]+|${escapeRegExp(identity.dispatcher)})`)
-  return new RegExp(`^${pattern}$`).exec(localpart)?.[1]
-}
-
 export function humanID(identity: Identity) {
   return `@${identity.person}:${identity.serverName}`
 }
@@ -68,15 +58,16 @@ export function parseTarget(identity: Identity, to: string): Target {
   throw new Error(`Unrecognized target "${to}": use "user", a session ID (ses_...), @user:server, !room:server or #alias`)
 }
 
-/** How a sender relates to the receiving session, for framing. */
-export function describeSender(identity: Identity, sender: string, self: string) {
+/**
+ * How a sender relates to the receiving session, for framing. `owner` is the person whose agent the sender is, when its
+ * machine claim checks out (see machine.ts); the account's name says nothing.
+ */
+export function describeSender(identity: Identity, sender: string, self: string, owner?: string) {
   if (sender === self) return "you"
   if (sender === humanID(identity)) return `your user (${identity.person})`
-  const localpart = sender.slice(1).split(":")[0]
-  const owner = agentOwner(identity, localpart)
-  if (owner === identity.person) return "another of your user's agent sessions"
+  if (owner === humanID(identity)) return "another of your user's agent sessions"
   if (owner) return `an agent session of ${owner}`
-  return `a person (${localpart})`
+  return `a person (${sender.slice(1).split(":")[0]})`
 }
 
 export function mentions(event: any, self: string) {
@@ -91,6 +82,8 @@ export interface ReceivedMessage {
   eventId: string
   sender: string
   senderName?: string
+  /** Whose agent the sender is, if it can be confirmed. */
+  senderOwner?: string
   body: string
   time: number
   /** The message this one replies to, with an excerpt when it could be fetched. */
@@ -183,7 +176,7 @@ export function formatMessage(identity: Identity, self: string, message: Receive
     lines.push(`(reactions: ${message.reactions.map(({ key, senders }) => `${key} ${senders.map(who).join(", ")}`).join("; ")})`)
   }
   const body = lines.map((line) => `  ${line}`).join("\n")
-  return `${message.roomLabel} — ${who}, ${describeSender(identity, message.sender, self)}, ${time} UTC, ${message.eventId}:\n${body}`
+  return `${message.roomLabel} — ${who}, ${describeSender(identity, message.sender, self, message.senderOwner)}, ${time} UTC, ${message.eventId}:\n${body}`
 }
 
 export const TRUST_NOTE =

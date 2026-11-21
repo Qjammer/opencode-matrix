@@ -5,7 +5,6 @@ import {
   DEFAULT_LOCALPART,
   describeAttachment,
   describeCount,
-  describeSender,
   dispatcherLocalpart,
   excerpt,
   formatMessage,
@@ -46,6 +45,7 @@ import {
   type ModelRef,
   type StartOptions,
 } from "./commands.ts"
+import { anchorHolds, isMachineID, loadMachineKey, signEvent, verifyEvent } from "./machine.ts"
 import { checkClientPath, Matrix, MatrixError, readAsToken } from "./matrix.ts"
 import { checkTopicPrefix, DEFAULT_TOPIC_PREFIX, newTopic, Ntfy, readNtfyToken, Waker } from "./push.ts"
 import { categories, describeOperation, findOperations, listLine, MAX_RESULTS, operations, searchOperations, specURL, type Operation } from "./openapi.ts"
@@ -81,6 +81,13 @@ export interface AgentMatrixOptions {
    * and `topicPrefix` (default `up`) starts the topics the token may read.
    */
   ntfy?: { url: string; gateway?: string; tokenFile?: string; topicPrefix?: string }
+  /**
+   * This machine's Ed25519 private key (PEM, `openssl genpkey -algorithm ed25519`), which signs every event its agents
+   * send. Without it, this machine's agents read as people, here and elsewhere.
+   */
+  machineKey?: string
+  /** Other machines whose agents are someone's (the person by default), besides those trusted with !trust. */
+  trustedMachines?: { key: string; owner?: string }[]
   /** Largest file matrix_download fetches, in MB. Default 50. */
   maxDownloadMB?: number
   debug?: boolean
@@ -109,6 +116,8 @@ const PUSH_RULES = [
 ]
 const RETRY_MS = 5_000
 const MAX_API_CHARS = 20_000
+/** How many events may come between a signed event and its anchor (see machine.ts). */
+const ANCHOR_WINDOW = 50
 const DEFAULT_MAX_DOWNLOAD_MB = 50
 const SYNC_FILTER = {
   presence: { not_types: ["*"] },
@@ -181,7 +190,17 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     dispatcher: options.dispatcher ?? DEFAULT_DISPATCHER,
   }
   checkLocalpart(identity.localpart)
-  const matrix = new Matrix({ homeserver: options.homeserver, serverName: options.serverName, asToken: readAsToken(options.registration) })
+  const machineKey = options.machineKey ? loadMachineKey(options.machineKey) : undefined
+  for (const { key, owner } of options.trustedMachines ?? []) {
+    if (!isMachineID(key)) throw new Error(`agent-matrix: "${key}" in trustedMachines is not a machine key`)
+    if (owner !== undefined && !owner.startsWith("@")) throw new Error(`agent-matrix: owner "${owner}" in trustedMachines is not a user ID`)
+  }
+  const matrix = new Matrix({
+    homeserver: options.homeserver,
+    serverName: options.serverName,
+    asToken: readAsToken(options.registration),
+    sign: machineKey && ((event, anchor) => signEvent(machineKey, event, anchor)),
+  })
   const state = shared()
   state.ctxs.add(ctx)
   const topicPrefix = options.ntfy?.topicPrefix ?? DEFAULT_TOPIC_PREFIX
@@ -209,6 +228,37 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     if (!names.has(user)) names.set(user, await matrix.displayName(as, user))
     return names.get(user)
   }
+  const anchored = new Map<string, boolean>()
+  /**
+   * Whose agent sent `event`: the owner of the machine that signed it, if this machine trusts that machine and the
+   * event is no replay. Trust is looked up every time, so !untrust applies at once.
+   */
+  async function senderOwner(as: string, roomId: string, event: any) {
+    if (event.sender === as || event.sender === humanID(identity)) return undefined
+    const signed = verifyEvent(roomId, event)
+    const owner = signed && (await trustedMachines()).get(signed.machine)?.owner
+    if (!signed || !owner) return undefined
+    if (!anchored.has(event.event_id)) {
+      const before = await matrix.eventsBefore(as, roomId, event.event_id, ANCHOR_WINDOW).catch(() => undefined)
+      if (!before) return undefined
+      anchored.set(event.event_id, anchorHolds(event, signed.anchor, before))
+    }
+    return anchored.get(event.event_id) ? owner : undefined
+  }
+
+  /** Machine key → whose machine it is: this one, the trustedMachines option and !trust. */
+  async function trustedMachines() {
+    const machines = new Map<string, { owner: string; source: string }>()
+    if (machineKey) machines.set(machineKey.id, { owner: humanID(identity), source: "this machine" })
+    for (const { key, owner } of options.trustedMachines ?? []) machines.set(key, { owner: owner ?? humanID(identity), source: "configuration" })
+    for (const [key, { owner }] of Object.entries(await trusted())) machines.set(key, { owner, source: "!trust" })
+    return machines
+  }
+
+  async function trusted() {
+    return ((await storage().get("trusted")) ?? {}) as Record<string, { owner: string; added: number }>
+  }
+
   const labels = new Map<string, string>()
   async function roomLabel(as: string, roomId: string) {
     if (!labels.has(roomId)) {
@@ -371,6 +421,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
       eventId: event.event_id,
       sender: event.sender,
       senderName: await senderName(userID, event.sender),
+      senderOwner: await senderOwner(userID, roomId, event),
       body: messageText(event.content),
       time: event.origin_server_ts ?? Date.now(),
       inReplyTo,
@@ -396,6 +447,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
       eventId: event.event_id,
       sender: event.sender,
       senderName: await senderName(userID, event.sender),
+      senderOwner: await senderOwner(userID, roomId, event),
       body: "",
       time: event.origin_server_ts ?? Date.now(),
       reaction: { key: relation.key, to: relation.event_id, excerpt: eventExcerpt(original) },
@@ -603,6 +655,9 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     if (command?.name === "sessions") return reply(await recentSessions())
     if (command?.name === "default") return reply(await roomDefaults(workspace, roomId, command.args))
     if (command?.name === "rename") return reply(await renameDispatcher(dispatcher, command.args))
+    if (command?.name === "machine") return reply(await describeMachines())
+    if (command?.name === "trust") return reply(await trustMachine(command.args))
+    if (command?.name === "untrust") return reply(await untrustMachine(command.args))
     if (command) return reply(`Unknown command !${command.name}.\n\n${await dispatcherHelpText(workspace)}`)
 
     const { options, rest } = parseOptions(text)
@@ -726,6 +781,43 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
     await matrix.setDisplayName(dispatcher, name)
     await storage().set(`displayname:${DISPATCHER}`, name)
     return `Renamed to ${name}.`
+  }
+
+  async function describeMachines() {
+    const lines = [
+      machineKey
+        ? `This machine's key: ${machineKey.id}`
+        : "This machine has no key (the machineKey option), so its agents' messages read as a person's everywhere.",
+    ]
+    const others = [...(await trustedMachines())].filter(([key]) => key !== machineKey?.id)
+    lines.push(others.length ? "Machines whose agents this one recognizes:" : "No other machines trusted.")
+    for (const [key, { owner, source }] of others) lines.push(`  ${key}: ${owner} (${source})`)
+    return lines.join("\n")
+  }
+
+  async function trustMachine(args: string) {
+    const [key, owner = humanID(identity), ...rest] = args.split(/\s+/)
+    if (!key || rest.length || !isMachineID(key) || !/^@[^:]+:.+$/.test(owner)) {
+      return "Usage: !trust <key> [@owner], with the key that machine's dispatcher shows for !machine."
+    }
+    if (key === machineKey?.id) return "That is this machine's own key."
+    await storage().set("trusted", { ...(await trusted()), [key]: { owner, added: Date.now() } })
+    return [
+      `Trusted ${key}: on this machine, messages signed with it now read as coming from ${owner}'s agents.`,
+      "Only trust a key that machine's own dispatcher showed you: whoever holds a trusted key can pass their agents off",
+      `as ${owner}'s here. Undo with !untrust ${key}.`,
+    ].join(" ")
+  }
+
+  async function untrustMachine(key: string) {
+    const list = await trusted()
+    if (!list[key]) {
+      if (options.trustedMachines?.some((machine) => machine.key === key)) return `${key} is trusted in the configuration (trustedMachines): remove it there.`
+      return `${key} is not trusted. !machine lists the trusted machines.`
+    }
+    delete list[key]
+    await storage().set("trusted", list)
+    return `No longer trusting ${key}.`
   }
 
   async function notifyFailure(dispatcher: string, roomId: string, what: string, error: unknown) {
@@ -965,7 +1057,7 @@ export async function setupAgentMatrix(ctx: any): Promise<() => Promise<void>> {
       const members = await matrix.joinedMembers(self, roomId)
       out.push({
         room: roomId,
-        label: dmWith ? `DM with ${dmWith} (${describeSender(identity, dmWith, self)})` : await roomLabel(self, roomId),
+        label: dmWith ? `DM with ${dmWith}` : await roomLabel(self, roomId),
         members: members.length,
       })
     }
